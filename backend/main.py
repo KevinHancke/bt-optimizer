@@ -194,6 +194,14 @@ async def run_optimization(request: Request):
         
         print(f"Starting optimization for {ticker} on {timeframe} timeframe")
         print(f"Parameter ranges: {param_ranges}")
+        print(f"Keys in param_ranges: {list(param_ranges.keys())}")
+        print(f"Values in param_ranges: {list(param_ranges.values())}")
+        
+        # Verify the structure of the buy and sell conditions
+        if buy_conditions:
+            print(f"First buy condition: {buy_conditions[0]}")
+        if sell_conditions:
+            print(f"First sell condition: {sell_conditions[0]}")
         
         # Get DataFrame from cache or load it
         cache_key = f"{ticker}_{timeframe}"
@@ -225,6 +233,36 @@ async def run_optimization(request: Request):
             use_parallel=use_parallel,
             max_workers=max_workers
         )
+        
+        # Convert results to dict for JSON response
+        results = results_df.to_dict(orient='records')
+        
+        # Check if results contain the expected parameters
+        if results:
+            print("Full results data structure:")
+            for col in results_df.columns:
+                print(f"Column: {col}")
+                
+            # Let's inspect the first result more carefully
+            first_result = results[0]
+            print(f"First result keys: {first_result.keys()}")
+            
+            # Check if we have any columns with sma_1_length or sma_2_length
+            sma_columns = [col for col in results_df.columns if 'sma' in col.lower()]
+            print(f"SMA-related columns: {sma_columns}")
+            
+            # Make sure all original parameter keys are included
+            for key in param_ranges.keys():
+                param_key = f"param_{key}"
+                if param_key in first_result:
+                    print(f"Found parameter {param_key} with value: {first_result[param_key]}")
+                else:
+                    print(f"Missing parameter: {param_key}")
+        
+        # Debug the optimization results
+        if not results_df.empty:
+            print(f"Columns in results_df: {results_df.columns.tolist()}")
+            print(f"First row: {results_df.iloc[0].to_dict()}")
         
         # Convert results to dict for JSON response
         results = results_df.to_dict(orient='records')

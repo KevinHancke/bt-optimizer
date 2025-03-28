@@ -25,6 +25,8 @@ def generate_parameter_combinations(param_ranges: Dict[str, List[Any]]) -> List[
     param_names = list(param_ranges.keys())
     param_values = list(param_ranges.values())
     
+    print(f"Parameter names to be combined: {param_names}")
+    
     # Generate all combinations using itertools.product
     all_combinations = list(itertools.product(*param_values))
     
@@ -33,7 +35,7 @@ def generate_parameter_combinations(param_ranges: Dict[str, List[Any]]) -> List[
     for combo in all_combinations:
         param_dict = {param_names[i]: combo[i] for i in range(len(param_names))}
         result.append(param_dict)
-        print(param_dict)
+        print(f"Generated combination: {param_dict}")
     
     return result
 
@@ -41,18 +43,13 @@ def run_backtest_with_params(df: pd.DataFrame, params: Dict[str, Any], buy_condi
                             sell_conditions: List[Dict]) -> Dict[str, Any]:
     """
     Run a single backtest with specific parameters and return the results.
-    
-    Args:
-        df (pd.DataFrame): Base DataFrame with OHLCV data
-        params (Dict[str, Any]): Dictionary of parameters for this run
-        buy_conditions (List[Dict]): Buy conditions template
-        sell_conditions (List[Dict]): Sell conditions template
-    
-    Returns:
-        Dict[str, Any]: Results dict with params and performance metrics
     """
     # Create a copy of the DataFrame for this run
     df_copy = df.copy()
+    
+    # Keep a copy of the original params for later reference
+    original_params = params.copy()
+    print(f"Original params for this run: {original_params}")
     
     # Extract indicator params and trading params
     indicator_params = {}
@@ -173,9 +170,9 @@ def run_backtest_with_params(df: pd.DataFrame, params: Dict[str, Any], buy_condi
     # Calculate performance
     performance = calculate_performance_summary(trades)
     
-    # Return results with the parameters used
+    # Return results with the original parameters used
     return {
-        'params': params,
+        'params': original_params,  # Use original_params instead of potentially modified params
         'performance': performance
     }
 
@@ -240,19 +237,26 @@ def optimize(df: pd.DataFrame, param_ranges: Dict[str, List[Any]],
             
         # Extract parameters and performance metrics
         params = result['params']
+        print(f"Processing result with params: {params}")
         performance = result['performance']
         
         # Create a flat result dictionary
         flat_result = {}
         
-        # Format the parameter combination string showing all parameters
+        # Format parameter combination as a simple string without Python syntax
         param_parts = []
         for key, value in params.items():
             param_parts.append(f"{key}={value}")
             # Also add individual parameter columns
             flat_result[f"param_{key}"] = value
         
-        # Add the formatted parameter combination string
+        # Check if we have the expected parameters
+        expected_params = list(param_ranges.keys())
+        for param in expected_params:
+            if param not in params:
+                print(f"WARNING: Expected parameter '{param}' not found in result params!")
+        
+        # Just join the parts with pipe separator - no repr() or str() on the dictionary
         flat_result["param_combination"] = " | ".join(param_parts)
         
         # Add all performance metrics
