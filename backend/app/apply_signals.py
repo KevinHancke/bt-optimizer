@@ -64,7 +64,7 @@ def apply_sell_conditions(df: pd.DataFrame, conditions: list) -> pd.DataFrame:
         comparator = condition['comparator']
         right_operand = condition['right_operand']
 
-        print(f"Evaluating sell condition: {left_operand} {operator} {right_operand}")
+        print(f"Evaluating sell condition: {left_operand} {comparator} {right_operand}")  # Fix: use comparator instead of operator
 
         if comparator in operators:
             left_series = get_shifted_series(df, left_operand)

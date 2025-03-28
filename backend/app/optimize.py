@@ -33,6 +33,7 @@ def generate_parameter_combinations(param_ranges: Dict[str, List[Any]]) -> List[
     for combo in all_combinations:
         param_dict = {param_names[i]: combo[i] for i in range(len(param_names))}
         result.append(param_dict)
+        print(param_dict)
     
     return result
 
@@ -230,26 +231,41 @@ def optimize(df: pd.DataFrame, param_ranges: Dict[str, List[Any]],
             except Exception as e:
                 print(f"Error with params {params}: {e}")
     
-    # Convert results to DataFrame
-    results_df = pd.DataFrame(results)
+    # Create a simple list of dictionaries for the final results
+    final_results = []
     
-    # Create flat columns for parameters and performance metrics
-    flat_results = []
-    for _, row in results_df.iterrows():
-        flat_row = {}
-        # Add parameters
-        for param_key, param_value in row['params'].items():
-            flat_row[f"param_{param_key}"] = param_value
-        
-        # Add performance metrics
-        for metric_key, metric_value in row['performance'].items():
-            flat_row[f"metric_{metric_key}"] = metric_value
+    for result in results:
+        if not result or 'params' not in result or 'performance' not in result:
+            continue
             
-        flat_results.append(flat_row)
+        # Extract parameters and performance metrics
+        params = result['params']
+        performance = result['performance']
+        
+        # Create a flat result dictionary
+        flat_result = {}
+        
+        # Format the parameter combination string showing all parameters
+        param_parts = []
+        for key, value in params.items():
+            param_parts.append(f"{key}={value}")
+            # Also add individual parameter columns
+            flat_result[f"param_{key}"] = value
+        
+        # Add the formatted parameter combination string
+        flat_result["param_combination"] = " | ".join(param_parts)
+        
+        # Add all performance metrics
+        for metric_key, metric_value in performance.items():
+            flat_result[f"metric_{metric_key}"] = metric_value
+        
+        final_results.append(flat_result)
     
-    # Convert to DataFrame and sort by profit factor (descending)
-    results_flat_df = pd.DataFrame(flat_results)
-    if not results_flat_df.empty:
-        results_flat_df = results_flat_df.sort_values(by='metric_profit_factor', ascending=False)
+    # Convert to DataFrame
+    results_df = pd.DataFrame(final_results) if final_results else pd.DataFrame()
     
-    return results_flat_df
+    # Sort by profit factor if available
+    if not results_df.empty and 'metric_profit_factor' in results_df.columns:
+        results_df = results_df.sort_values(by='metric_profit_factor', ascending=False)
+    
+    return results_df

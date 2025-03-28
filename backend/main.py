@@ -231,9 +231,19 @@ async def run_optimization(request: Request):
         
         print(f"Optimization complete. Found {len(results)} results.")
         
+        # Extract information about the best combination
+        best_params = {}
+        best_combination = ""
+        if results:
+            best_params = {k.replace('param_', ''): v for k, v in results[0].items() 
+                          if k.startswith('param_') and k != 'param_combination'}
+            best_combination = results[0].get('param_combination', '')
+            
         return {
             "results": results,
-            "best_params": results[0] if results else None
+            "best_params": best_params,
+            "best_combination": best_combination,
+            "total_combinations": len(results)
         }
         
     except Exception as e:
