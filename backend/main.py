@@ -179,3 +179,64 @@ async def run_backtest(request: Request):
     except Exception as e:
         print(f"Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/optimize")
+async def run_optimization(request: Request):
+    try:
+        data = await request.json()
+        ticker = data.get('ticker', 'BTC/USD')
+        timeframe = data.get('timeframe', '1h')
+        param_ranges = data.get('param_ranges', {})
+        buy_conditions = data.get('buy_conditions', [])
+        sell_conditions = data.get('sell_conditions', [])
+        use_parallel = data.get('use_parallel', True)
+        max_workers = data.get('max_workers', 4)
+        
+        print(f"Starting optimization for {ticker} on {timeframe} timeframe")
+        print(f"Parameter ranges: {param_ranges}")
+        
+        # Get DataFrame from cache or load it
+        cache_key = f"{ticker}_{timeframe}"
+        if cache_key not in dataframe_cache:
+            # Load and resample the data if not in cache
+            ticker_files = {
+                'BTC/USD': 'Binance_BTCUSDT_1min.csv',
+                'SOL/USD': 'Binance_SOLUSDT_1min.csv',
+                'JUP/USD': 'Binance_JUPUSDT_1min.csv'
+            }
+            if ticker not in ticker_files:
+                raise Exception(f'Ticker {ticker} not found.')
+                
+            df = load_csv(ticker_files[ticker])
+            df = resample_df(df, timeframe)
+            df = get_entry_price(df)
+            dataframe_cache[cache_key] = df.copy()
+        else:
+            df = dataframe_cache[cache_key].copy()
+        
+        print(f"Running optimization with {len(df)} data points")
+        
+        # Run optimization
+        results_df = optimize(
+            df=df,
+            param_ranges=param_ranges,
+            buy_conditions=buy_conditions,
+            sell_conditions=sell_conditions,
+            use_parallel=use_parallel,
+            max_workers=max_workers
+        )
+        
+        # Convert results to dict for JSON response
+        results = results_df.to_dict(orient='records')
+        
+        print(f"Optimization complete. Found {len(results)} results.")
+        
+        return {
+            "results": results,
+            "best_params": results[0] if results else None
+        }
+        
+    except Exception as e:
+        print(f"Error during optimization: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
