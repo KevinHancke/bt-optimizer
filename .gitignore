@@ -1,0 +1,4 @@
+*.csv
+Binance_BTCUSDT_1min.csv
+.env
+*.db
