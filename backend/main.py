@@ -193,35 +193,19 @@ async def run_optimization(request: Request):
         max_workers = data.get('max_workers', 4)
         
         print(f"Starting optimization for {ticker} on {timeframe} timeframe")
-        print(f"Parameter ranges: {param_ranges}")
-        print(f"Keys in param_ranges: {list(param_ranges.keys())}")
-        print(f"Values in param_ranges: {list(param_ranges.values())}")
-        
-        # Verify the structure of the buy and sell conditions
-        if buy_conditions:
-            print(f"First buy condition: {buy_conditions[0]}")
-        if sell_conditions:
-            print(f"First sell condition: {sell_conditions[0]}")
-        
-        # Get DataFrame from cache or load it
-        cache_key = f"{ticker}_{timeframe}"
-        if cache_key not in dataframe_cache:
-            # Load and resample the data if not in cache
-            ticker_files = {
-                'BTC/USD': 'Binance_BTCUSDT_1min.csv',
-                'SOL/USD': 'Binance_SOLUSDT_1min.csv',
-                'JUP/USD': 'Binance_JUPUSDT_1min.csv'
-            }
-            if ticker not in ticker_files:
-                raise Exception(f'Ticker {ticker} not found.')
-                
-            df = load_csv(ticker_files[ticker])
-            df = resample_df(df, timeframe)
-            df = get_entry_price(df)
-            dataframe_cache[cache_key] = df.copy()
-        else:
-            df = dataframe_cache[cache_key].copy()
-        
+        # ...existing debug prints...
+
+        # Always load the raw data for optimization (do not use cached DataFrame with indicators)
+        ticker_files = {
+            'BTC/USD': 'Binance_BTCUSDT_1min.csv',
+            'SOL/USD': 'Binance_SOLUSDT_1min.csv',
+            'JUP/USD': 'Binance_JUPUSDT_1min.csv'
+        }
+        if ticker not in ticker_files:
+            raise Exception(f'Ticker {ticker} not found.')
+        df = load_csv(ticker_files[ticker])
+        # Do not resample here; let optimize/resample_df handle it per parameter set
+
         print(f"Running optimization with {len(df)} data points")
         
         # Run optimization
@@ -233,7 +217,11 @@ async def run_optimization(request: Request):
             use_parallel=use_parallel,
             max_workers=max_workers
         )
-        
+
+        # Replace inf, -inf, NaN with None for JSON serialization
+        results_df = results_df.replace([np.inf, -np.inf], np.nan)
+        results_df = results_df.astype(object).where(pd.notnull(results_df), None)
+
         # Convert results to dict for JSON response
         results = results_df.to_dict(orient='records')
         
@@ -251,14 +239,6 @@ async def run_optimization(request: Request):
             sma_columns = [col for col in results_df.columns if 'sma' in col.lower()]
             print(f"SMA-related columns: {sma_columns}")
             
-            # Make sure all original parameter keys are included
-            for key in param_ranges.keys():
-                param_key = f"param_{key}"
-                if param_key in first_result:
-                    print(f"Found parameter {param_key} with value: {first_result[param_key]}")
-                else:
-                    print(f"Missing parameter: {param_key}")
-        
         # Debug the optimization results
         if not results_df.empty:
             print(f"Columns in results_df: {results_df.columns.tolist()}")

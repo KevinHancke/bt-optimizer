@@ -9,6 +9,27 @@ from app.apply_indicators import ta_indicator
 from app.apply_signals import apply_buy_conditions, apply_sell_conditions, calculate_signals
 from app.backtest import backtest
 from app.performance_summary import calculate_performance_summary
+from app.prepare_data import resample_df, get_entry_price
+
+def preprocess_param_ranges(param_ranges: Dict[str, Any]) -> Dict[str, List[Any]]:
+    """
+    Preprocess param_ranges to handle special cases like multiple instances of the same indicator.
+    """
+    processed_ranges = {}
+    for key, values in param_ranges.items():
+        # Handle multiple instances of the same indicator (e.g., SMA, VWAP, etc.)
+        if isinstance(values, list) and values and isinstance(values[0], dict):
+            for i, instance in enumerate(values, start=1):
+                for param_key, param_values in instance.items():
+                    processed_ranges[f"{key}_{i}_{param_key}"] = param_values
+        # Handle single dict (legacy, e.g., vwap: {"anchor_values": [...]})
+        elif isinstance(values, dict):
+            for param_key, param_values in values.items():
+                processed_ranges[f"{key}_{param_key}"] = param_values
+        else:
+            # Handle regular parameters
+            processed_ranges[key] = values
+    return processed_ranges
 
 def generate_parameter_combinations(param_ranges: Dict[str, List[Any]]) -> List[Dict[str, Any]]:
     """
@@ -41,11 +62,17 @@ def generate_parameter_combinations(param_ranges: Dict[str, List[Any]]) -> List[
 
 def run_backtest_with_params(df: pd.DataFrame, params: Dict[str, Any], buy_conditions: List[Dict], 
                             sell_conditions: List[Dict]) -> Dict[str, Any]:
-    """
-    Run a single backtest with specific parameters and return the results.
-    """
-    # Create a copy of the DataFrame for this run
-    df_copy = df.copy()
+    # --- Add this block at the start of the function ---
+    # Handle freq_values (resample and recalculate entry price)
+    freq = params.get("freq_values")
+    if freq:
+        df_copy = resample_df(df, freq)
+        df_copy = get_entry_price(df_copy)
+    else:
+        df_copy = df.copy()
+    # ...rest of the function unchanged...
+    # Remove or comment out the original "df_copy = df.copy()" line above.
+    # ...existing code...
     
     # Keep a copy of the original params for later reference
     original_params = params.copy()
@@ -54,8 +81,8 @@ def run_backtest_with_params(df: pd.DataFrame, params: Dict[str, Any], buy_condi
     # Extract indicator params and trading params
     indicator_params = {}
     trading_params = {}
-    column_mapping = {}  # Will map template column names to actual dynamic column names
-    
+    # Remove column_mapping logic entirely
+
     # Group parameters by indicator type and index (for multiple instances of same indicator)
     for key, value in params.items():
         if '_' in key:
@@ -74,7 +101,8 @@ def run_backtest_with_params(df: pd.DataFrame, params: Dict[str, Any], buy_condi
                     indicator_params[indicator_key] = {
                         'type': indicator_type,
                         'index': indicator_index,
-                        'params': {}
+                        'params': {},
+                        'output_col': key  # Use the param key as the output column name
                     }
                 
                 indicator_params[indicator_key]['params'][param_name] = value
@@ -86,7 +114,8 @@ def run_backtest_with_params(df: pd.DataFrame, params: Dict[str, Any], buy_condi
                 if indicator_type not in indicator_params:
                     indicator_params[indicator_type] = {
                         'type': indicator_type,
-                        'params': {}
+                        'params': {},
+                        'output_col': key
                     }
                 
                 indicator_params[indicator_type]['params'][param_name] = value
@@ -97,65 +126,41 @@ def run_backtest_with_params(df: pd.DataFrame, params: Dict[str, Any], buy_condi
             # Simple parameter like 'tp' or 'sl'
             trading_params[key] = value
     
+    # --- Add this block after grouping trading_params ---
+    # Map *_values keys to expected keys for trading logic
+    if 'tp_values' in trading_params:
+        trading_params['tp'] = trading_params['tp_values']
+    if 'sl_values' in trading_params:
+        trading_params['sl'] = trading_params['sl_values']
+
     # Apply indicators with specific parameters
     for ind_key, ind_config in indicator_params.items():
         ind_type = ind_config['type']
         params = ind_config['params']
-        
-        # Apply the indicator
-        result = ta_indicator(df_copy, ind_type, params)
-        
-        # Create mappings for column names based on params
-        if ind_type.upper() == 'SMA' and 'length' in params:
-            length = params['length']
-            # For indexed SMAs (SMA_1, SMA_2), use appropriate template column name
-            if 'index' in ind_config:
-                template_col = f"{ind_type.upper()}_{ind_config['index']}_LENGTH"
-                column_mapping[template_col] = f"{ind_type.upper()}_{length}"
-            else:
-                column_mapping[f"{ind_type.upper()}_LENGTH"] = f"{ind_type.upper()}_{length}"
-        
-        # Similar handling for other indicator types
-        elif ind_type.upper() == 'RSI' and 'length' in params:
-            length = params['length']
-            column_mapping[f"{ind_type.upper()}_LENGTH"] = f"{ind_type.upper()}_{length}"
-        elif ind_type.upper() == 'EMA' and 'length' in params:
-            length = params['length']
-            column_mapping[f"{ind_type.upper()}_LENGTH"] = f"{ind_type.upper()}_{length}"
-        
-        # Add result to DataFrame
+        output_col = ind_config['output_col']
+
+        # --- VWAP anchor_values -> anchor param fix ---
+        if ind_type.lower() == 'vwap' and 'anchor_values' in params:
+            # Rename anchor_values to anchor for ta_indicator
+            params = params.copy()
+            params['anchor'] = params.pop('anchor_values')
+
+        # Pass output_col to ta_indicator
+        result = ta_indicator(df_copy, ind_type, params, output_col=output_col)
+
+        # Always add as DataFrame with the correct column name
         if isinstance(result, pd.DataFrame):
             df_copy = pd.concat([df_copy, result], axis=1)
         else:
-            col_name = f"{ind_type.upper()}_{params.get('length', '')}"
-            df_copy[col_name] = result
+            df_copy[output_col] = result
     
+    # After applying all indicators:
+    print(f"Columns in df_copy: {df_copy.columns.tolist()}")
+    print(df_copy[[col for col in df_copy.columns if 'sma' in col or 'vwap' in col]].head())
+
     # Create deep copies of conditions to modify for this run
     current_buy_conditions = deepcopy(buy_conditions)
     current_sell_conditions = deepcopy(sell_conditions)
-    
-    # Update column references in conditions based on parameter values
-    for condition in current_buy_conditions:
-        if 'left_operand' in condition and 'column' in condition['left_operand']:
-            for template_col, actual_col in column_mapping.items():
-                if condition['left_operand']['column'] == template_col:
-                    condition['left_operand']['column'] = actual_col
-                    
-        if 'right_operand' in condition and 'column' in condition['right_operand']:
-            for template_col, actual_col in column_mapping.items():
-                if condition['right_operand']['column'] == template_col:
-                    condition['right_operand']['column'] = actual_col
-    
-    for condition in current_sell_conditions:
-        if 'left_operand' in condition and 'column' in condition['left_operand']:
-            for template_col, actual_col in column_mapping.items():
-                if condition['left_operand']['column'] == template_col:
-                    condition['left_operand']['column'] = actual_col
-                    
-        if 'right_operand' in condition and 'column' in condition['right_operand']:
-            for template_col, actual_col in column_mapping.items():
-                if condition['right_operand']['column'] == template_col:
-                    condition['right_operand']['column'] = actual_col
     
     # Apply conditions with dynamic column names
     df_copy = apply_buy_conditions(df_copy, current_buy_conditions)
@@ -176,30 +181,22 @@ def run_backtest_with_params(df: pd.DataFrame, params: Dict[str, Any], buy_condi
         'performance': performance
     }
 
-def optimize(df: pd.DataFrame, param_ranges: Dict[str, List[Any]], 
+def optimize(df: pd.DataFrame, param_ranges: Dict[str, Any], 
              buy_conditions: List[Dict], sell_conditions: List[Dict], 
              use_parallel: bool = True, max_workers: int = 4) -> pd.DataFrame:
     """
     Run optimization by testing all combinations of parameters.
-    
-    Args:
-        df (pd.DataFrame): Input DataFrame with OHLCV data
-        param_ranges (Dict[str, List[Any]]): Dictionary mapping parameter names to lists of values to test
-        buy_conditions (List[Dict]): Buy conditions template 
-        sell_conditions (List[Dict]): Sell conditions template
-        use_parallel (bool): Whether to use parallel processing
-        max_workers (int): Maximum number of parallel workers
-    
-    Returns:
-        pd.DataFrame: DataFrame with all results sorted by performance
     """
+    # Preprocess param_ranges to handle special cases
+    param_ranges = preprocess_param_ranges(param_ranges)
+    
     # Generate all parameter combinations
     all_combinations = generate_parameter_combinations(param_ranges)
     print(f"Running optimization with {len(all_combinations)} parameter combinations")
     
     results = []
     
-    # Use parallel processing if enabled
+    # Use parallel or sequential processing
     if use_parallel and len(all_combinations) > 1:
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
             futures = [
@@ -220,7 +217,6 @@ def optimize(df: pd.DataFrame, param_ranges: Dict[str, List[Any]],
                 except Exception as e:
                     print(f"Error in worker: {e}")
     else:
-        # Sequential processing
         for params in all_combinations:
             try:
                 result = run_backtest_with_params(df, params, buy_conditions, sell_conditions)
@@ -228,47 +224,16 @@ def optimize(df: pd.DataFrame, param_ranges: Dict[str, List[Any]],
             except Exception as e:
                 print(f"Error with params {params}: {e}")
     
-    # Create a simple list of dictionaries for the final results
+    # Process results into a DataFrame
     final_results = []
-    
     for result in results:
         if not result or 'params' not in result or 'performance' not in result:
             continue
-            
-        # Extract parameters and performance metrics
-        params = result['params']
-        print(f"Processing result with params: {params}")
-        performance = result['performance']
-        
-        # Create a flat result dictionary
-        flat_result = {}
-        
-        # Format parameter combination as a simple string without Python syntax
-        param_parts = []
-        for key, value in params.items():
-            param_parts.append(f"{key}={value}")
-            # Also add individual parameter columns
-            flat_result[f"param_{key}"] = value
-        
-        # Check if we have the expected parameters
-        expected_params = list(param_ranges.keys())
-        for param in expected_params:
-            if param not in params:
-                print(f"WARNING: Expected parameter '{param}' not found in result params!")
-        
-        # Just join the parts with pipe separator - no repr() or str() on the dictionary
-        flat_result["param_combination"] = " | ".join(param_parts)
-        
-        # Add all performance metrics
-        for metric_key, metric_value in performance.items():
-            flat_result[f"metric_{metric_key}"] = metric_value
-        
+        flat_result = {f"param_{k}": v for k, v in result['params'].items()}
+        flat_result.update({f"metric_{k}": v for k, v in result['performance'].items()})
         final_results.append(flat_result)
     
-    # Convert to DataFrame
     results_df = pd.DataFrame(final_results) if final_results else pd.DataFrame()
-    
-    # Sort by profit factor if available
     if not results_df.empty and 'metric_profit_factor' in results_df.columns:
         results_df = results_df.sort_values(by='metric_profit_factor', ascending=False)
     
