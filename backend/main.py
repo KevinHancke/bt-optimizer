@@ -125,19 +125,39 @@ async def run_backtest(request: Request):
         backtest_params = data.get('backtestParams', {})
         ticker = data.get('ticker', 'BTC/USD')  
         timeframe = data.get('timeframe', '1h')
+
+        # Always load raw data for backtest, not from cache
+        ticker_files = {
+            'BTC/USD': 'Binance_BTCUSDT_1min.csv',
+            'SOL/USD': 'Binance_SOLUSDT_1min.csv',
+            'JUP/USD': 'Binance_JUPUSDT_1min.csv'
+        }
+        if ticker not in ticker_files:
+            raise Exception(f'Ticker {ticker} not found.')
+        df = load_csv(ticker_files[ticker])
+        df = resample_df(df, timeframe)
+        df = get_entry_price(df)
+
+        # Apply indicators as in optimization
+        indicators = backtest_params.get('indicators', [])
+        for indicator in indicators:
+            result = ta_indicator(df, indicator['type'], indicator.get('params', {}))
+            if isinstance(result, pd.Series):
+                df = df.join(result)
+            elif isinstance(result, pd.DataFrame):
+                df = pd.concat([df, result], axis=1)
         
-        # Get DataFrame from cache instead of request body
-        cache_key = f"{ticker}_{timeframe}"
-        if cache_key not in dataframe_cache:
-            raise Exception(f'No cached data found for {ticker} on {timeframe} timeframe. Apply indicators first.')
-        
-        # Use the cached DataFrame with indicators already applied
-        df = dataframe_cache[cache_key].copy()
-        
-        print(f'Using cached DataFrame with {len(df)} rows')
-        print(f'Received backtest parameters: {backtest_params}')
-        
-        print('start backtest...')
+        # Clean up NaN and infinite values before backtest
+        df.replace([np.inf, -np.inf], np.nan, inplace=True)
+        df.dropna(inplace=True)
+
+        # --- Debug prints for alignment and state ---
+        print("DF index:", df.index[:5])
+        print("DF shape:", df.shape)
+        print("DF columns:", df.columns.tolist())
+        print("First rows:\n", df.head())
+        print("First entry_price values:", df['entry_price'].head())
+        # --- End debug prints ---
 
         # Apply all buy conditions using for loops
         df = apply_buy_conditions(df, backtest_params.get('buy_conditions', []))
@@ -153,8 +173,15 @@ async def run_backtest(request: Request):
         df.replace([np.inf, -np.inf], np.nan, inplace=True)
         df.dropna(inplace=True)
 
-        print(df.info())
-        print(df)
+        # --- Add debug print before backtest ---
+        print("--- Final DF state before backtest ---")
+        print("DF index:", df.index[:5])
+        print("DF shape:", df.shape)
+        print("DF columns:", df.columns.tolist())
+        print("First rows:\n", df.head())
+        print("Buy Signals Sum:", df['buy_signal'].sum())
+        print("Sell Signals Sum:", df['sell_signal'].sum())
+        # --- End debug print ---
 
         # Run the backtest
         trades = backtest(df, backtest_params['tp'], backtest_params['sl'])
@@ -217,10 +244,6 @@ async def run_optimization(request: Request):
             use_parallel=use_parallel,
             max_workers=max_workers
         )
-
-        # Replace inf, -inf, NaN with None for JSON serialization
-        results_df = results_df.replace([np.inf, -np.inf], np.nan)
-        results_df = results_df.astype(object).where(pd.notnull(results_df), None)
 
         # Convert results to dict for JSON response
         results = results_df.to_dict(orient='records')

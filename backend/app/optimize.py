@@ -4,6 +4,7 @@ from typing import List, Dict, Any, Union
 import concurrent.futures
 from copy import deepcopy
 import re
+import numpy as np
 
 from app.apply_indicators import ta_indicator
 from app.apply_signals import apply_buy_conditions, apply_sell_conditions, calculate_signals
@@ -62,40 +63,28 @@ def generate_parameter_combinations(param_ranges: Dict[str, List[Any]]) -> List[
 
 def run_backtest_with_params(df: pd.DataFrame, params: Dict[str, Any], buy_conditions: List[Dict], 
                             sell_conditions: List[Dict]) -> Dict[str, Any]:
-    # --- Add this block at the start of the function ---
-    # Handle freq_values (resample and recalculate entry price)
+   
     freq = params.get("freq_values")
     if freq:
         df_copy = resample_df(df, freq)
         df_copy = get_entry_price(df_copy)
     else:
         df_copy = df.copy()
-    # ...rest of the function unchanged...
-    # Remove or comment out the original "df_copy = df.copy()" line above.
-    # ...existing code...
     
-    # Keep a copy of the original params for later reference
     original_params = params.copy()
     print(f"Original params for this run: {original_params}")
     
-    # Extract indicator params and trading params
+    
     indicator_params = {}
     trading_params = {}
-    # Remove column_mapping logic entirely
-
-    # Group parameters by indicator type and index (for multiple instances of same indicator)
+    
     for key, value in params.items():
         if '_' in key:
-            # Parse keys like "sma_1_length", "sma_2_length", "rsi_length"
             parts = key.split('_')
-            
-            # Check if it's an indexed indicator like "sma_1" or "sma_2"
             if len(parts) >= 2 and parts[1].isdigit():
-                # This is an indexed indicator parameter (e.g., sma_1_length)
-                indicator_type = parts[0]  # e.g., "sma"
-                indicator_index = parts[1]  # e.g., "1"
-                param_name = '_'.join(parts[2:])  # e.g., "length"
-                
+                indicator_type = parts[0] 
+                indicator_index = parts[1] 
+                param_name = '_'.join(parts[2:])
                 indicator_key = f"{indicator_type}_{indicator_index}"
                 if indicator_key not in indicator_params:
                     indicator_params[indicator_key] = {
@@ -104,57 +93,54 @@ def run_backtest_with_params(df: pd.DataFrame, params: Dict[str, Any], buy_condi
                         'params': {},
                         'output_col': key  # Use the param key as the output column name
                     }
-                
                 indicator_params[indicator_key]['params'][param_name] = value
             elif parts[0] in ['sma', 'ema', 'rsi', 'macd', 'vwap', 'bollinger']:
-                # This is a non-indexed indicator parameter (e.g., rsi_length)
                 indicator_type = parts[0]
                 param_name = '_'.join(parts[1:])
-                
                 if indicator_type not in indicator_params:
                     indicator_params[indicator_type] = {
                         'type': indicator_type,
                         'params': {},
                         'output_col': key
                     }
-                
                 indicator_params[indicator_type]['params'][param_name] = value
             else:
-                # Not an indicator parameter
                 trading_params[key] = value
         else:
-            # Simple parameter like 'tp' or 'sl'
             trading_params[key] = value
     
-    # --- Add this block after grouping trading_params ---
-    # Map *_values keys to expected keys for trading logic
+    
     if 'tp_values' in trading_params:
         trading_params['tp'] = trading_params['tp_values']
     if 'sl_values' in trading_params:
         trading_params['sl'] = trading_params['sl_values']
 
-    # Apply indicators with specific parameters
+    
     for ind_key, ind_config in indicator_params.items():
         ind_type = ind_config['type']
         params = ind_config['params']
         output_col = ind_config['output_col']
 
-        # --- VWAP anchor_values -> anchor param fix ---
+        # VWAP anchor_values -> anchor param fix
         if ind_type.lower() == 'vwap' and 'anchor_values' in params:
-            # Rename anchor_values to anchor for ta_indicator
             params = params.copy()
             params['anchor'] = params.pop('anchor_values')
 
-        # Pass output_col to ta_indicator
         result = ta_indicator(df_copy, ind_type, params, output_col=output_col)
 
-        # Always add as DataFrame with the correct column name
         if isinstance(result, pd.DataFrame):
             df_copy = pd.concat([df_copy, result], axis=1)
         else:
             df_copy[output_col] = result
     
-    # After applying all indicators:
+    # --- Debug prints for alignment and state ---
+    print("DF index:", df_copy.index[:5])
+    print("DF shape:", df_copy.shape)
+    print("DF columns:", df_copy.columns.tolist())
+    print("First rows:\n", df_copy.head())
+    print("First entry_price values:", df_copy['entry_price'].head())
+    # --- End debug prints ---
+
     print(f"Columns in df_copy: {df_copy.columns.tolist()}")
     print(df_copy[[col for col in df_copy.columns if 'sma' in col or 'vwap' in col]].head())
 
@@ -166,7 +152,21 @@ def run_backtest_with_params(df: pd.DataFrame, params: Dict[str, Any], buy_condi
     df_copy = apply_buy_conditions(df_copy, current_buy_conditions)
     df_copy = apply_sell_conditions(df_copy, current_sell_conditions)
     df_copy = calculate_signals(df_copy)
-    
+
+    # Clean up NaN and infinite values AFTER signals (matching /api/backtest)
+    df_copy.replace([np.inf, -np.inf], np.nan, inplace=True)
+    df_copy.dropna(inplace=True)
+
+    # --- Add debug print before backtest ---
+    print("--- Final DF state before backtest ---")
+    print("DF index:", df_copy.index[:5])
+    print("DF shape:", df_copy.shape)
+    print("DF columns:", df_copy.columns.tolist())
+    print("First rows:\n", df_copy.head())
+    print("Buy Signals Sum:", df_copy['buy_signal'].sum())
+    print("Sell Signals Sum:", df_copy['sell_signal'].sum())
+    # --- End debug print ---
+
     # Run backtest
     tp = trading_params.get('tp', 1.0)
     sl = trading_params.get('sl', 1.0)
