@@ -3,4 +3,3 @@ uvicorn==0.23.2
 pandas==2.1.1
 numpy==1.26.0
 pandas-ta==0.3.14b0
-python-multipart==0.0.6
